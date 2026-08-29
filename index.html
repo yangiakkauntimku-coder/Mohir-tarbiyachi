@@ -1,0 +1,823 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+<title>Mohir Tarbiyachi</title>
+<meta name="description" content="Tarbiyachilar uchun attestatsiya testlariga tayyorgarlik platformasi" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Manrope:wght@400;500;600;700;800&family=Caveat:wght@600;700&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: { extend: {
+      colors: {
+        board: '#1F3B34', boardLight:'#2C4F45', boardDeep:'#16302A',
+        paper: '#FAF6ED', paperLine:'#E4DCC8', paperDark:'#F1EADA',
+        ink: '#233229', amber:'#E8A33D', amberDark:'#C9822A',
+        pen: '#C1443D', sage:'#7FA592'
+      },
+      fontFamily: {
+        display: ['"Space Grotesk"','system-ui','sans-serif'],
+        body: ['Manrope','system-ui','sans-serif'],
+        hand: ['Caveat','cursive'],
+      },
+      borderRadius: { xl2:'1.1rem' },
+    } }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  html, body, #app { height: 100%; }
+  body { background:#1F3B34; color:#233229; font-family:'Manrope', system-ui, sans-serif; -webkit-tap-highlight-color:transparent; }
+  .app-shell { max-width:480px; margin:0 auto; min-height:100vh; background:#FAF6ED; position:relative; padding-bottom:96px; }
+  ::-webkit-scrollbar { width:0; height:0; }
+  @media (min-width:481px){ .app-shell{ box-shadow:0 0 80px rgba(0,0,0,0.35); } }
+
+  .paper-lines { background-image: repeating-linear-gradient(to bottom, transparent, transparent 30px, #E4DCC8 31px); }
+  .chalk-dust { background-image: radial-gradient(rgba(255,255,255,0.06) 1px, transparent 1px); background-size: 14px 14px; }
+
+  .stamp { font-family:'Caveat',cursive; border:3px dashed currentColor; border-radius:9999px; }
+  .tilt-1 { transform: rotate(-4deg); }
+  .tilt-2 { transform: rotate(3deg); }
+  .tilt-3 { transform: rotate(-2deg); }
+
+  .bubble { width:26px; height:26px; border-radius:9999px; border:2.5px solid #233229; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .bubble.filled { background:#233229; }
+  .bubble.filled::after { content:''; }
+
+  .washi { position:relative; }
+  .washi::before { content:''; position:absolute; top:-8px; left:24px; width:56px; height:20px; background:rgba(232,163,61,0.35); transform:rotate(-3deg); border-radius:2px; }
+
+  .torn-top { clip-path: polygon(0% 6px, 3% 0%, 7% 6px, 11% 1px, 15% 6px, 19% 0%, 23% 6px, 27% 1px, 31% 6px, 35% 0%, 39% 6px, 43% 1px, 47% 6px, 51% 0%, 55% 6px, 59% 1px, 63% 6px, 67% 0%, 71% 6px, 75% 1px, 79% 6px, 83% 0%, 87% 6px, 91% 1px, 95% 6px, 99% 0%, 100% 6px, 100% 100%, 0% 100%); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+/* ============================================================
+   Mohir Tarbiyachi — single-file build (vanilla JS + Supabase)
+   Visual identity: exam-sheet / chalkboard
+   ============================================================ */
+
+const SUPABASE_URL = 'https://mxrxgzrzxkvdzyfdvlhe.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im14cnhnenJ6eGt2ZHp5ZmR2bGhlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5MjkxMjAsImV4cCI6MjEwMzUwNTEyMH0.VXY6hLjH80hTFgiK0Oe0IdDh5eTJyOise10WD4vGG80';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const app = document.getElementById('app');
+const state = { session: null, profile: null, loading: true };
+const taking = { test: null, questions: [], current: 0, answers: {}, secondsLeft: 0, startedAt: 0, timerId: null, submitting: false, started: false };
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+function initials(name) {
+  if (!name) return '?';
+  return name.trim().split(/\s+/).map((p) => p[0]).slice(0, 2).join('').toUpperCase();
+}
+function letter(i) { return ['A','B','C','D','E','F'][i] || (i+1); }
+function phoneToEmail(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  return `u${digits}@mohir.local`;
+}
+function normalizePhone(phone) {
+  return String(phone || '').replace(/\D/g, '');
+}
+function loaderHTML() {
+  return `<div class="min-h-screen flex items-center justify-center bg-board"><div class="w-9 h-9 rounded-full border-[3px] border-amber/30 border-t-amber animate-spin"></div></div>`;
+}
+function bottomNav(active) {
+  const items = [
+    { to:'/', label:'Bosh', icon:'&#9678;' },
+    { to:'/testlar', label:'Testlar', icon:'&#9776;' },
+    { to:'/reyting', label:'Reyting', icon:'&#9733;' },
+    { to:'/profil', label:'Profil', icon:'&#9679;' },
+  ];
+  return `<nav class="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-board px-3 py-2.5 flex justify-around items-center z-40 rounded-t-2xl">
+    ${items.map((i) => `<a href="#${i.to}" class="flex flex-col items-center gap-1 px-3 py-1 font-display text-[11px] font-semibold tracking-wide ${active === i.to ? 'text-amber' : 'text-paper/50'}">
+        <span class="text-base leading-none">${i.icon}</span>${i.label.toUpperCase()}
+      </a>`).join('')}
+  </nav>`;
+}
+function adminNav(active) {
+  const items = [
+    { to:'/admin', label:'Boshqaruv' },
+    { to:'/admin/testlar', label:'Testlar' },
+    { to:'/admin/testlar/yangi', label:'Yuklash' },
+    { to:'/admin/foydalanuvchilar', label:'Foydalanuvchilar' },
+  ];
+  return `
+  <aside class="hidden md:flex md:w-64 md:flex-col bg-board text-paper p-6 fixed top-0 left-0 bottom-0">
+    <div class="flex items-center gap-2 mb-10">
+      <div class="w-10 h-10 rounded-full border-2 border-amber flex items-center justify-center font-hand text-xl text-amber">MT</div>
+      <span class="font-display font-bold tracking-wide">ADMIN</span>
+    </div>
+    <nav class="flex-1 space-y-1 font-display text-sm">
+      ${items.map((i) => `<a href="#${i.to}" class="block px-3 py-2.5 rounded-lg ${active === i.to ? 'bg-amber text-board font-bold' : 'text-paper/60 hover:text-paper'}">${i.label}</a>`).join('')}
+    </nav>
+    <button onclick="handleSignOut('#/admin/kirish')" class="text-left px-3 py-2.5 rounded-lg text-sm font-display text-pen/90 hover:text-pen">Chiqish</button>
+  </aside>
+  <nav class="md:hidden fixed bottom-0 left-0 right-0 bg-board flex justify-around py-2.5 z-40 rounded-t-2xl">
+    ${items.map((i) => `<a href="#${i.to}" class="px-2 py-1 text-[11px] font-display font-semibold ${active === i.to ? 'text-amber' : 'text-paper/50'}">${i.label}</a>`).join('')}
+  </nav>`;
+}
+function adminShell(title, active, bodyHTML) {
+  return `<div class="min-h-screen bg-paper paper-lines md:flex">
+    ${adminNav(active)}
+    <div class="flex-1 md:ml-64 pb-24 md:pb-8">
+      <header class="sticky top-0 z-30 bg-paper/95 backdrop-blur border-b-2 border-dashed border-paperLine px-6 py-5"><h1 class="font-display font-bold text-xl text-ink">${esc(title)}</h1></header>
+      <main class="p-6">${bodyHTML}</main>
+    </div>
+  </div>`;
+}
+
+/* ---------------- AUTH ---------------- */
+async function loadProfile(userId) {
+  if (!userId) { state.profile = null; return; }
+  const { data } = await sb.from('profiles').select('*').eq('id', userId).single();
+  state.profile = data || null;
+}
+async function handleSignOut(redirect) {
+  await sb.auth.signOut();
+  state.profile = null;
+  location.hash = redirect || '#/kirish';
+}
+
+/* ---------------- ROUTER ---------------- */
+function clearTimer() {
+  if (taking.timerId) { clearInterval(taking.timerId); taking.timerId = null; }
+}
+async function router() {
+  if (state.loading) { app.innerHTML = loaderHTML(); return; }
+  const hash = (location.hash || '#/').slice(1);
+  if (!hash.startsWith('/test/')) clearTimer();
+
+  const requireAuth = () => { if (!state.session) { location.hash = '#/kirish'; return false; } return true; };
+  const requireAdmin = () => { if (!state.session || !state.profile?.is_admin) { location.hash = '#/admin/kirish'; return false; } return true; };
+
+  if (hash === '/kirish') return renderLogin();
+  if (hash === '/royxat') return renderRegister();
+  if (hash === '/admin/kirish') return renderAdminLogin();
+
+  if (hash === '/' || hash === '') { if (requireAuth()) return renderHome(); return; }
+  if (hash === '/testlar') { if (requireAuth()) return renderTests(); return; }
+  if (hash.startsWith('/test/')) { if (requireAuth()) return renderTestTaking(hash.slice('/test/'.length)); return; }
+  if (hash.startsWith('/natija/')) { if (requireAuth()) return renderResult(hash.slice('/natija/'.length)); return; }
+  if (hash === '/reyting') { if (requireAuth()) return renderRating(); return; }
+  if (hash === '/profil') { if (requireAuth()) return renderProfile(); return; }
+
+  if (hash === '/admin') { if (requireAdmin()) return renderAdminDashboard(); return; }
+  if (hash === '/admin/testlar') { if (requireAdmin()) return renderAdminTests(); return; }
+  if (hash === '/admin/testlar/yangi') { if (requireAdmin()) return renderAdminUpload(); return; }
+  if (hash === '/admin/foydalanuvchilar') { if (requireAdmin()) return renderAdminUsers(); return; }
+
+  location.hash = '#/';
+}
+window.addEventListener('hashchange', router);
+
+/* ---------------- LOGIN / REGISTER ---------------- */
+function authShell(inner) {
+  return `<div class="min-h-screen bg-board chalk-dust flex items-center justify-center px-6 py-10">
+    <div class="w-full max-w-sm">
+      <div class="text-center mb-8">
+        <div class="w-16 h-16 rounded-full border-[3px] border-amber flex items-center justify-center mx-auto mb-4">
+          <span class="font-hand text-3xl text-amber">MT</span>
+        </div>
+        <h1 class="font-display text-2xl font-bold text-paper">Mohir Tarbiyachi</h1>
+        <p class="font-hand text-xl text-amber -rotate-1 mt-1">Attestatsiyaga birga tayyorlanamiz!</p>
+      </div>
+      ${inner}
+    </div>
+  </div>`;
+}
+function renderLogin() {
+  app.innerHTML = authShell(`
+    <form id="loginForm" class="bg-paper rounded-xl2 p-6 space-y-3 shadow-2xl torn-top">
+      <input type="tel" required placeholder="Telefon raqam (masalan: 901234567)" id="loginPhone" class="w-full px-4 py-3 rounded-lg bg-white border-2 border-paperLine focus:outline-none focus:border-board font-body" />
+      <input type="password" required placeholder="Parol" id="loginPassword" class="w-full px-4 py-3 rounded-lg bg-white border-2 border-paperLine focus:outline-none focus:border-board font-body" />
+      <p id="loginError" class="text-pen text-sm font-semibold"></p>
+      <button type="submit" id="loginBtn" class="w-full py-3 rounded-lg bg-board text-paper font-display font-bold disabled:opacity-60">Kirish →</button>
+    </form>
+    <p class="text-center text-sm text-paper/70 mt-6 font-body">Hisobingiz yo'qmi? <a href="#/royxat" class="text-amber font-bold">Ro'yxatdan o'tish</a></p>
+    <a href="#/admin/kirish" class="block text-center text-xs text-paper/40 mt-4 font-body">Admin sifatida kirish</a>
+  `);
+  document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('loginBtn'); const err = document.getElementById('loginError');
+    err.textContent = '';
+    const digits = normalizePhone(document.getElementById('loginPhone').value);
+    if (digits.length < 7) { err.textContent = "Telefon raqamni to'liq kiriting."; return; }
+    btn.disabled = true; btn.textContent = 'Tekshirilmoqda...';
+    const { error } = await sb.auth.signInWithPassword({
+      email: phoneToEmail(digits),
+      password: document.getElementById('loginPassword').value,
+    });
+    btn.disabled = false; btn.textContent = 'Kirish →';
+    if (error) { err.textContent = "Raqam yoki parol noto'g'ri."; return; }
+    location.hash = '#/';
+  });
+}
+function renderRegister() {
+  app.innerHTML = authShell(`
+    <form id="regForm" class="bg-paper rounded-xl2 p-6 space-y-3 shadow-2xl torn-top">
+      <input required placeholder="Ism va familiya" id="regName" class="w-full px-4 py-3 rounded-lg bg-white border-2 border-paperLine focus:outline-none focus:border-board font-body" />
+      <input type="tel" required placeholder="Telefon raqam (masalan: 901234567)" id="regPhone" class="w-full px-4 py-3 rounded-lg bg-white border-2 border-paperLine focus:outline-none focus:border-board font-body" />
+      <input type="password" required placeholder="Parol" id="regPassword" class="w-full px-4 py-3 rounded-lg bg-white border-2 border-paperLine focus:outline-none focus:border-board font-body" />
+      <p id="regError" class="text-pen text-sm font-semibold"></p>
+      <button type="submit" id="regBtn" class="w-full py-3 rounded-lg bg-board text-paper font-display font-bold disabled:opacity-60">Boshlash →</button>
+    </form>
+    <p class="text-center text-sm text-paper/70 mt-6 font-body">Hisobingiz bormi? <a href="#/kirish" class="text-amber font-bold">Kirish</a></p>
+  `);
+  document.getElementById('regForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('regBtn'); const err = document.getElementById('regError');
+    const password = document.getElementById('regPassword').value;
+    const rawPhone = document.getElementById('regPhone').value;
+    const digits = normalizePhone(rawPhone);
+    err.textContent = '';
+    if (digits.length < 7) { err.textContent = "Telefon raqamni to'liq kiriting."; return; }
+    if (password.length < 6) { err.textContent = "Parol kamida 6 belgidan iborat bo'lishi kerak."; return; }
+    btn.disabled = true; btn.textContent = 'Yaratilmoqda...';
+    const fullName = document.getElementById('regName').value;
+    const { data, error } = await sb.auth.signUp({
+      email: phoneToEmail(digits),
+      password,
+      options: { data: { full_name: fullName } },
+    });
+    if (error) {
+      btn.disabled = false; btn.textContent = 'Boshlash →';
+      err.textContent = error.message.includes('already registered') || error.message.includes('exists')
+        ? 'Bu raqam bilan hisob allaqachon mavjud.'
+        : "Xatolik: " + error.message;
+      return;
+    }
+    if (data.user) {
+      await sb.from('profiles').upsert({ id: data.user.id, full_name: fullName, phone: rawPhone });
+    }
+    location.hash = '#/';
+  });
+}
+
+/* ---------------- HOME ---------------- */
+async function renderHome() {
+  app.innerHTML = loaderHTML();
+  const user = state.session.user;
+  const [{ data: results }, { data: tests }] = await Promise.all([
+    sb.from('results').select('score,total').eq('user_id', user.id),
+    sb.from('tests').select('id,title,description,question_count,duration_minutes,is_vip,attempt_count').order('attempt_count', { ascending:false }).limit(5),
+  ]);
+  let avgScore = '—', solved = 0;
+  if (results && results.length) {
+    const totalScore = results.reduce((s,r) => s+(r.score||0),0);
+    const totalMax = results.reduce((s,r) => s+(r.total||0),0);
+    avgScore = totalMax ? Math.round((totalScore/totalMax)*100) + '%' : '0%';
+    solved = results.length;
+  }
+  const isVip = !!state.profile?.is_vip;
+  const firstName = (state.profile?.full_name || 'Tarbiyachi').split(' ')[0];
+
+  app.innerHTML = `<div class="app-shell">
+    <div class="bg-board chalk-dust rounded-b-[2rem] px-6 pt-8 pb-8">
+      <div class="flex items-center justify-between">
+        <div>
+          <h1 class="font-display text-2xl font-bold text-paper">Salom, ${esc(firstName)} 👋</h1>
+          <p class="font-hand text-xl text-amber -rotate-1 mt-0.5">Bugun ham mashq qilaylik!</p>
+        </div>
+        ${isVip ? `<div class="stamp tilt-2 text-amber w-14 h-14 flex items-center justify-center text-xs font-bold shrink-0">VIP</div>` : ''}
+      </div>
+      <a href="#/testlar" class="mt-6 flex items-center justify-between bg-amber rounded-xl2 px-5 py-4">
+        <div><p class="font-display font-bold text-board">Testni boshlang!</p><p class="text-board/70 text-xs mt-0.5 font-body">Attestatsiya formatidagi savollar</p></div>
+        <span class="text-board text-xl">→</span>
+      </a>
+    </div>
+
+    <div class="px-6 -mt-5">
+      <div class="grid grid-cols-2 gap-4">
+        ${statStamp('&#9678;', "reyting o'rni", '—', 'tilt-1')}
+        ${statStamp('&#9733;', "o'rtacha", avgScore, 'tilt-2')}
+        ${statStamp('&#9776;', 'yechilgan', solved, 'tilt-3')}
+        ${statStamp('&#9679;', 'obuna', isVip ? 'VIP' : 'Oddiy', 'tilt-1')}
+      </div>
+    </div>
+
+    <div class="px-6 mt-8">
+      <div class="flex items-center justify-between border-b-2 border-dashed border-paperLine pb-2">
+        <h2 class="font-display font-bold text-ink">Ommabop testlar</h2>
+        <a href="#/testlar" class="text-board/60 text-sm font-semibold font-body">Hammasi →</a>
+      </div>
+      <div class="mt-4 space-y-3">
+        ${(tests || []).map((t) => testCard(t, isVip)).join('') || `<p class="text-center text-ink/40 text-sm py-6 font-body">Hozircha testlar mavjud emas.</p>`}
+      </div>
+    </div>
+    ${bottomNav('/')}
+  </div>`;
+}
+function statStamp(icon, label, value, tilt) {
+  return `<div class="bg-paper border-2 border-ink/10 rounded-xl2 p-4 text-center ${tilt}">
+    <span class="text-base">${icon}</span>
+    <p class="font-hand text-3xl text-ink leading-none mt-1">${value}</p>
+    <p class="text-ink/50 text-[11px] mt-1 font-body font-medium">${label}</p>
+  </div>`;
+}
+function testCard(t, isVip) {
+  const locked = t.is_vip && !isVip;
+  return `<a href="#/test/${t.id}" class="relative block bg-white rounded-xl2 p-4 border-2 border-ink/5">
+    ${t.is_vip ? `<span class="absolute -top-2 -right-2 stamp tilt-2 text-amberDark w-11 h-11 flex items-center justify-center text-[10px] font-bold bg-paper">VIP</span>` : ''}
+    ${t.category ? `<span class="text-[10px] font-bold text-sage bg-sage/10 px-2 py-0.5 rounded-full font-body">${esc(t.category)}</span>` : ''}
+    <p class="font-display font-bold text-ink mt-1.5">${esc(t.title)}</p>
+    ${t.description ? `<p class="text-ink/50 text-sm mt-0.5 font-body">${esc(t.description)}</p>` : ''}
+    <div class="flex items-center gap-3 mt-2 text-xs text-ink/40 font-body"><span>${t.question_count||0} savol</span><span>·</span><span>${t.duration_minutes} daqiqa</span></div>
+    <div class="mt-3 w-full text-center py-2.5 rounded-lg font-display font-bold text-sm ${locked ? 'bg-ink/5 text-ink/30' : 'bg-board text-paper'}">${locked ? "VIP obuna kerak" : "Ishlash →"}</div>
+  </a>`;
+}
+
+/* ---------------- TESTS LIST ---------------- */
+async function renderTests() {
+  app.innerHTML = loaderHTML();
+  const { data: tests } = await sb.from('tests').select('id,title,description,category,question_count,duration_minutes,is_vip,attempt_count').order('created_at', { ascending:false });
+  window.__allTests = tests || [];
+  window.__testsQuery = ''; window.__testsCategory = 'Barchasi';
+  drawTests();
+}
+function drawTests() {
+  const tests = window.__allTests || [];
+  const isVip = !!state.profile?.is_vip;
+  const categories = ['Barchasi', ...new Set(tests.map((t) => t.category).filter(Boolean))];
+  const q = window.__testsQuery || ''; const cat = window.__testsCategory || 'Barchasi';
+  const filtered = tests.filter((t) => (t.title||'').toLowerCase().includes(q.toLowerCase()) && (cat === 'Barchasi' || t.category === cat));
+
+  app.innerHTML = `<div class="app-shell px-6 pt-7">
+    <h1 class="font-display text-2xl font-bold text-ink">Testlar</h1>
+    <p class="font-hand text-lg text-sage -rotate-1">fan bo'yicha saralang yoki qidiring</p>
+    <input id="testSearch" value="${esc(q)}" placeholder="Test nomi bo'yicha qidirish..." class="w-full mt-4 px-4 py-3 rounded-lg bg-white border-2 border-paperLine focus:outline-none focus:border-board font-body" />
+    <div class="flex gap-2 mt-3 overflow-x-auto pb-1 -mx-6 px-6">
+      ${categories.map((c) => `<button data-cat="${esc(c)}" class="catBtn shrink-0 px-4 py-2 rounded-full text-sm font-display font-semibold whitespace-nowrap border-2 ${cat === c ? 'bg-board text-paper border-board' : 'bg-white text-ink/50 border-paperLine'}">${esc(c)}${c === 'Barchasi' ? ` (${tests.length})` : ''}</button>`).join('')}
+    </div>
+    <div class="mt-4 space-y-3">
+      ${filtered.map((t) => testCard(t, isVip)).join('') || `<p class="text-center text-ink/40 text-sm py-10 font-body">Testlar topilmadi.</p>`}
+    </div>
+    ${bottomNav('/testlar')}
+  </div>`;
+
+  document.getElementById('testSearch').addEventListener('input', (e) => { window.__testsQuery = e.target.value; drawTests(); document.getElementById('testSearch').focus(); });
+  document.querySelectorAll('.catBtn').forEach((b) => b.addEventListener('click', () => { window.__testsCategory = b.dataset.cat; drawTests(); }));
+}
+
+/* ---------------- TEST TAKING ---------------- */
+async function renderTestTaking(testId) {
+  if (!taking.test || taking.test.id !== testId) {
+    app.innerHTML = loaderHTML();
+    const { data: t } = await sb.from('tests').select('*').eq('id', testId).single();
+    const { data: qs } = await sb.from('questions').select('*').eq('test_id', testId).order('order_index', { ascending:true });
+    taking.test = t; taking.questions = qs || []; taking.current = 0; taking.answers = {};
+    taking.secondsLeft = (t?.duration_minutes || 90) * 60; taking.startedAt = 0; taking.submitting = false;
+    taking.started = false;
+  }
+  drawTestTaking();
+}
+function drawTestTaking() {
+  const t = taking.test;
+  if (!t) { app.innerHTML = `<div class="app-shell flex flex-col items-center justify-center px-6 text-center"><p class="text-ink/50 font-body">Test topilmadi.</p><a href="#/testlar" class="text-board font-bold mt-3 font-display">Testlarga qaytish</a></div>`; return; }
+
+  const isVip = !!state.profile?.is_vip;
+  const locked = t.is_vip && !isVip;
+  if (locked) {
+    app.innerHTML = `<div class="app-shell flex flex-col items-center justify-center px-6 text-center">
+      <div class="stamp tilt-2 text-amberDark w-20 h-20 flex items-center justify-center text-sm font-bold">VIP</div>
+      <h1 class="font-display font-bold text-lg text-ink mt-4">Bu VIP test</h1>
+      <p class="text-ink/50 text-sm mt-1 font-body">"${esc(t.title)}" testini ishlash uchun VIP obuna kerak. Obuna faollashtirish uchun admin bilan bog'laning.</p>
+      <a href="#/testlar" class="text-board font-bold mt-5 font-display">Boshqa testlarga o'tish</a>
+    </div>`;
+    return;
+  }
+
+  if (!taking.started) {
+    app.innerHTML = `<div class="app-shell flex flex-col justify-center px-6 pb-6 text-center">
+      <p class="font-hand text-4xl text-sage -rotate-2">tayyormisiz?</p>
+      <h1 class="font-display text-xl font-bold text-ink mt-2">${esc(t.title)}</h1>
+      ${t.description ? `<p class="text-ink/50 text-sm mt-1 font-body">${esc(t.description)}</p>` : ''}
+      <div class="flex justify-center gap-4 mt-5 text-sm font-body">
+        <span class="bg-white border-2 border-paperLine rounded-full px-3 py-1">${taking.questions.length} savol</span>
+        <span class="bg-white border-2 border-paperLine rounded-full px-3 py-1">${t.duration_minutes} daqiqa</span>
+      </div>
+      <button id="startBtn" ${taking.questions.length===0?'disabled':''} class="mt-8 py-3 rounded-lg bg-board text-paper font-display font-bold disabled:opacity-50">Boshlash →</button>
+      <a href="#/testlar" class="text-ink/40 text-sm mt-4 font-body">Bekor qilish</a>
+    </div>`;
+    document.getElementById('startBtn')?.addEventListener('click', () => { taking.startedAt = Date.now(); taking.started = true; startTimer(); drawTestTaking(); });
+    return;
+  }
+
+  const q = taking.questions[taking.current];
+  const minutes = String(Math.floor(taking.secondsLeft/60)).padStart(2,'0');
+  const seconds = String(taking.secondsLeft%60).padStart(2,'0');
+
+  app.innerHTML = `<div class="app-shell px-6 pt-6 pb-8">
+    <div class="flex items-center justify-between">
+      <p class="font-display text-sm font-bold text-ink/50">SAVOL ${taking.current+1} / ${taking.questions.length}</p>
+      <span id="timerBadge" class="font-display text-sm font-bold px-3 py-1 rounded-full border-2 ${taking.secondsLeft<60 ? 'border-pen text-pen' : 'border-board text-board'}">${minutes}:${seconds}</span>
+    </div>
+    <div class="w-full h-2 bg-paperDark rounded-full mt-3 overflow-hidden border border-paperLine"><div class="h-full bg-amber" style="width:${((taking.current+1)/taking.questions.length)*100}%"></div></div>
+
+    <div class="bg-white rounded-xl2 p-5 border-2 border-ink/5 mt-5">
+      <p class="font-display font-bold text-ink leading-relaxed">${esc(q.question_text)}</p>
+      <div class="mt-4 space-y-2.5">
+        ${q.options.map((opt, idx) => `<button data-idx="${idx}" class="optBtn w-full flex items-center gap-3 text-left px-4 py-3 rounded-lg border-2 font-body text-sm ${taking.answers[q.id]===idx ? 'border-board bg-board/5' : 'border-paperLine'}">
+          <span class="bubble ${taking.answers[q.id]===idx ? 'filled' : ''} font-display text-[11px] font-bold ${taking.answers[q.id]===idx ? 'text-paper' : 'text-ink/50'}">${taking.answers[q.id]===idx ? '✓' : letter(idx)}</span>
+          <span class="text-ink">${esc(opt)}</span>
+        </button>`).join('')}
+      </div>
+    </div>
+
+    <div class="flex gap-3 mt-5">
+      <button id="prevBtn" ${taking.current===0?'disabled':''} class="flex-1 py-3 rounded-lg bg-white border-2 border-paperLine font-display font-bold text-ink/50 disabled:opacity-40">Oldingi</button>
+      ${taking.current < taking.questions.length-1
+        ? `<button id="nextBtn" class="flex-1 py-3 rounded-lg bg-board text-paper font-display font-bold">Keyingi</button>`
+        : `<button id="submitBtn" class="flex-1 py-3 rounded-lg bg-amber text-board font-display font-bold disabled:opacity-60">Yakunlash</button>`}
+    </div>
+  </div>`;
+
+  document.querySelectorAll('.optBtn').forEach((b) => b.addEventListener('click', () => { taking.answers[q.id] = Number(b.dataset.idx); drawTestTaking(); }));
+  document.getElementById('prevBtn').addEventListener('click', () => { taking.current = Math.max(0, taking.current-1); drawTestTaking(); });
+  document.getElementById('nextBtn')?.addEventListener('click', () => { taking.current++; drawTestTaking(); });
+  document.getElementById('submitBtn')?.addEventListener('click', submitTest);
+}
+function startTimer() {
+  clearTimer();
+  taking.timerId = setInterval(() => {
+    taking.secondsLeft--;
+    const badge = document.getElementById('timerBadge');
+    if (badge) {
+      const m = String(Math.floor(taking.secondsLeft/60)).padStart(2,'0');
+      const s = String(taking.secondsLeft%60).padStart(2,'0');
+      badge.textContent = `${m}:${s}`;
+      if (taking.secondsLeft < 60) badge.className = 'font-display text-sm font-bold px-3 py-1 rounded-full border-2 border-pen text-pen';
+    }
+    if (taking.secondsLeft <= 0) { clearTimer(); submitTest(); }
+  }, 1000);
+}
+async function submitTest() {
+  if (taking.submitting) return;
+  taking.submitting = true;
+  clearTimer();
+  let score = 0;
+  taking.questions.forEach((q) => { if (taking.answers[q.id] === q.correct_index) score++; });
+  const durationSeconds = Math.round((Date.now() - taking.startedAt) / 1000);
+  const { data, error } = await sb.from('results').insert({
+    user_id: state.session.user.id, test_id: taking.test.id, score, total: taking.questions.length, duration_seconds: durationSeconds,
+  }).select().single();
+  taking.submitting = false;
+  if (!error && data) {
+    taking.test = null;
+    location.hash = '#/natija/' + data.id;
+  }
+}
+
+/* ---------------- RESULT ---------------- */
+async function renderResult(resultId) {
+  app.innerHTML = loaderHTML();
+  const { data: r } = await sb.from('results').select('*').eq('id', resultId).single();
+  if (!r) { app.innerHTML = `<div class="app-shell flex items-center justify-center"><p class="text-ink/50 font-body">Natija topilmadi.</p></div>`; return; }
+  const { data: t } = await sb.from('tests').select('title').eq('id', r.test_id).single();
+  const percent = r.total ? Math.round((r.score/r.total)*100) : 0;
+  const minutes = Math.floor(r.duration_seconds/60); const seconds = r.duration_seconds%60;
+  const good = percent >= 70;
+
+  app.innerHTML = `<div class="app-shell flex flex-col items-center justify-center px-6 text-center pb-10">
+    <div class="stamp ${good ? 'tilt-2 text-pen' : 'tilt-1 text-sage'} w-36 h-36 flex flex-col items-center justify-center">
+      <span class="font-hand text-5xl leading-none">${percent}%</span>
+      <span class="font-hand text-lg -mt-1">${good ? "a'lo!" : 'harakat qiling'}</span>
+    </div>
+    <p class="text-ink/50 text-sm mt-5 font-body">${esc(t?.title||'')}</p>
+    <div class="grid grid-cols-2 gap-3 w-full mt-6">
+      <div class="bg-white rounded-xl2 p-4 border-2 border-ink/5"><p class="font-display text-xl font-bold text-ink">${r.score}/${r.total}</p><p class="text-ink/40 text-xs mt-0.5 font-body">to'g'ri javob</p></div>
+      <div class="bg-white rounded-xl2 p-4 border-2 border-ink/5"><p class="font-display text-xl font-bold text-ink">${minutes}:${String(seconds).padStart(2,'0')}</p><p class="text-ink/40 text-xs mt-0.5 font-body">sarflangan vaqt</p></div>
+    </div>
+    <div class="flex gap-3 w-full mt-8">
+      <a href="#/testlar" class="flex-1 py-3 rounded-lg bg-white border-2 border-paperLine font-display font-bold text-ink/60">Testlar</a>
+      <a href="#/reyting" class="flex-1 py-3 rounded-lg bg-board text-paper font-display font-bold">Reyting</a>
+    </div>
+  </div>`;
+}
+
+/* ---------------- RATING ---------------- */
+async function renderRating() {
+  app.innerHTML = loaderHTML();
+  const { data: rows } = await sb.from('leaderboard_view').select('*').order('total_score', { ascending:false }).limit(50);
+  const list = rows || [];
+  const top3 = list.slice(0,3); const rest = list.slice(3);
+  const userId = state.session.user.id;
+
+  app.innerHTML = `<div class="app-shell">
+    <div class="bg-board chalk-dust rounded-b-[2rem] px-6 pt-8 pb-10">
+      <h1 class="font-display text-2xl font-bold text-paper">Sharaf taxtasi</h1>
+      <p class="font-hand text-xl text-amber -rotate-1">har testning birinchi urinishi</p>
+    </div>
+    <div class="px-6 -mt-6">
+      ${top3.length ? `<div class="bg-paper rounded-xl2 p-4 border-2 border-ink/5 grid grid-cols-3 gap-2 items-end text-center">
+        ${[top3[1],top3[0],top3[2]].map((r,i) => r ? `<div class="${i===1?'-translate-y-2':''}">
+            <div class="w-14 h-14 rounded-full mx-auto flex items-center justify-center font-display font-bold text-paper ${i===1?'bg-amber text-board':i===0?'bg-sage':'bg-pen'}">${initials(r.full_name)}</div>
+            <p class="text-xs font-bold text-ink mt-2 truncate font-body">${esc(r.full_name)}</p>
+            <p class="font-hand text-lg text-ink/60 -mt-1">${r.total_score} ball</p>
+            <div class="font-display text-xs font-bold text-ink/40 bg-paperDark rounded-lg mt-1 py-1">${i===1?1:i===0?2:3}</div>
+          </div>` : `<div></div>`).join('')}
+      </div>` : ''}
+      <div class="mt-4 space-y-2">
+        ${rest.map((r,i) => `<div class="flex items-center justify-between bg-white rounded-xl2 px-4 py-3 border-2 ${r.user_id===userId?'border-board':'border-ink/5'}">
+          <div class="flex items-center gap-3">
+            <span class="font-display text-ink/40 font-bold w-5 text-center">${i+4}</span>
+            <div class="w-9 h-9 rounded-full bg-board/10 text-board flex items-center justify-center text-xs font-display font-bold">${initials(r.full_name)}</div>
+            <div><p class="text-sm font-bold text-ink font-body">${esc(r.full_name)}</p><p class="text-xs text-ink/40 font-body">${r.tests_count} test</p></div>
+          </div>
+          <p class="font-hand text-2xl text-ink">${r.total_score}</p>
+        </div>`).join('') || `<p class="text-center text-ink/40 text-sm py-10 font-body">Hozircha natijalar yo'q.</p>`}
+      </div>
+    </div>
+    ${bottomNav('/reyting')}
+  </div>`;
+}
+
+/* ---------------- PROFILE ---------------- */
+async function renderProfile() {
+  app.innerHTML = loaderHTML();
+  const user = state.session.user;
+  const { data: history } = await sb.from('results').select('id,score,total,created_at,tests(title)').eq('user_id', user.id).order('created_at', { ascending:false }).limit(20);
+  const isVip = !!state.profile?.is_vip;
+
+  app.innerHTML = `<div class="app-shell">
+    <div class="bg-board chalk-dust rounded-b-[2rem] px-6 pt-8 pb-10 flex flex-col items-center text-center">
+      <div class="w-16 h-16 rounded-full bg-amber flex items-center justify-center text-board text-xl font-display font-bold">${(state.profile?.full_name||'T')[0].toUpperCase()}</div>
+      <h1 class="font-display text-lg font-bold text-paper mt-3">${esc(state.profile?.full_name||'')}</h1>
+      <p class="text-paper/50 text-sm font-body">${esc(state.profile?.phone || '')}</p>
+      ${isVip ? `<span class="mt-2 stamp tilt-1 text-amber px-4 py-1 text-xs font-bold">VIP OBUNA</span>` : `<span class="mt-2 text-xs font-bold text-paper/50 bg-white/5 px-3 py-1 rounded-full font-body">Oddiy foydalanuvchi</span>`}
+    </div>
+    <div class="px-6 -mt-4">
+      <h2 class="font-display font-bold text-ink mt-6 mb-3 border-b-2 border-dashed border-paperLine pb-2">Natijalar tarixi</h2>
+      <div class="space-y-2">
+        ${(history||[]).map((h) => `<div class="flex items-center justify-between bg-white rounded-xl2 px-4 py-3 border-2 border-ink/5">
+          <div><p class="text-sm font-bold text-ink font-body">${esc(h.tests?.title||'Test')}</p><p class="text-xs text-ink/40 font-body">${new Date(h.created_at).toLocaleDateString('uz-UZ')}</p></div>
+          <p class="font-hand text-2xl text-board">${h.score}/${h.total}</p>
+        </div>`).join('') || `<p class="text-center text-ink/40 text-sm py-6 font-body">Hali test ishlamagansiz.</p>`}
+      </div>
+      <button id="signOutBtn" class="w-full mt-6 py-3 rounded-lg bg-white border-2 border-paperLine font-display font-bold text-pen">Chiqish</button>
+    </div>
+    ${bottomNav('/profil')}
+  </div>`;
+  document.getElementById('signOutBtn').addEventListener('click', () => handleSignOut('#/kirish'));
+}
+
+/* ---------------- ADMIN LOGIN ---------------- */
+function renderAdminLogin() {
+  app.innerHTML = authShell(`
+    <form id="adminLoginForm" class="bg-paper rounded-xl2 p-6 space-y-3 shadow-2xl torn-top">
+      <input type="tel" required placeholder="Admin telefon raqami" id="adminPhone" class="w-full px-4 py-3 rounded-lg bg-white border-2 border-paperLine focus:outline-none focus:border-board font-body" />
+      <input type="password" required placeholder="Parol" id="adminPassword" class="w-full px-4 py-3 rounded-lg bg-white border-2 border-paperLine focus:outline-none focus:border-board font-body" />
+      <p id="adminLoginError" class="text-pen text-sm font-semibold"></p>
+      <button type="submit" id="adminLoginBtn" class="w-full py-3 rounded-lg bg-board text-paper font-display font-bold disabled:opacity-60">Kirish →</button>
+    </form>
+  `).replace('Attestatsiyaga birga tayyorlanamiz!', 'Admin boshqaruv paneli');
+  document.getElementById('adminLoginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('adminLoginBtn'); const err = document.getElementById('adminLoginError');
+    err.textContent = '';
+    const digits = normalizePhone(document.getElementById('adminPhone').value);
+    if (digits.length < 7) { err.textContent = "Telefon raqamni to'liq kiriting."; return; }
+    btn.disabled = true; btn.textContent = 'Tekshirilmoqda...';
+    const { data, error } = await sb.auth.signInWithPassword({ email: phoneToEmail(digits), password: document.getElementById('adminPassword').value });
+    if (error) { btn.disabled=false; btn.textContent='Kirish →'; err.textContent = "Raqam yoki parol noto'g'ri."; return; }
+    const { data: profile } = await sb.from('profiles').select('is_admin').eq('id', data.user.id).single();
+    if (!profile?.is_admin) { await sb.auth.signOut(); btn.disabled=false; btn.textContent='Kirish →'; err.textContent = 'Bu hisob admin huquqiga ega emas.'; return; }
+    location.hash = '#/admin';
+  });
+}
+
+/* ---------------- ADMIN DASHBOARD ---------------- */
+async function renderAdminDashboard() {
+  app.innerHTML = adminShell('Boshqaruv paneli', '/admin', loaderHTML());
+  const [{ count: testsCount }, { count: usersCount }, { count: vipCount }, { count: attemptsCount }] = await Promise.all([
+    sb.from('tests').select('*', { count:'exact', head:true }),
+    sb.from('profiles').select('*', { count:'exact', head:true }),
+    sb.from('profiles').select('*', { count:'exact', head:true }).eq('is_vip', true),
+    sb.from('results').select('*', { count:'exact', head:true }),
+  ]);
+  const { data: recent } = await sb.from('results').select('id,score,total,created_at,profiles(full_name),tests(title)').order('created_at', { ascending:false }).limit(8);
+
+  const body = `
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      ${statStamp('&#9776;', 'Testlar', testsCount||0, 'tilt-1')}
+      ${statStamp('&#9679;', 'Foydalanuvchilar', usersCount||0, 'tilt-2')}
+      ${statStamp('&#9733;', "VIP a'zolar", vipCount||0, 'tilt-3')}
+      ${statStamp('✓', 'Yechilgan', attemptsCount||0, 'tilt-1')}
+    </div>
+    <div class="flex gap-3 mt-6">
+      <a href="#/admin/testlar/yangi" class="flex-1 text-center py-3 rounded-lg bg-board text-paper font-display font-bold">Yangi test yuklash</a>
+      <a href="#/admin/foydalanuvchilar" class="flex-1 text-center py-3 rounded-lg bg-white border-2 border-paperLine font-display font-bold text-ink">VIP boshqarish</a>
+    </div>
+    <h2 class="font-display font-bold text-ink mt-8 mb-3 border-b-2 border-dashed border-paperLine pb-2">So'nggi urinishlar</h2>
+    <div class="bg-white rounded-xl2 border-2 border-ink/5 divide-y-2 divide-paperLine">
+      ${(recent||[]).map((r) => `<div class="flex items-center justify-between px-4 py-3">
+        <div><p class="text-sm font-bold text-ink font-body">${esc(r.profiles?.full_name)}</p><p class="text-xs text-ink/40 font-body">${esc(r.tests?.title)}</p></div>
+        <p class="font-hand text-xl text-board">${r.score}/${r.total}</p>
+      </div>`).join('') || `<p class="text-center text-ink/40 text-sm py-6 font-body">Hali faoliyat yo'q.</p>`}
+    </div>`;
+  app.innerHTML = adminShell('Boshqaruv paneli', '/admin', body);
+}
+
+/* ---------------- ADMIN TESTS ---------------- */
+async function renderAdminTests() {
+  app.innerHTML = adminShell('Testlar', '/admin/testlar', loaderHTML());
+  await loadAdminTests();
+}
+async function loadAdminTests() {
+  const { data: tests } = await sb.from('tests').select('*').order('created_at', { ascending:false });
+  window.__adminTests = tests || [];
+  drawAdminTests();
+}
+function drawAdminTests() {
+  const tests = window.__adminTests || [];
+  const body = `
+    <div class="flex justify-end mb-4"><a href="#/admin/testlar/yangi" class="px-4 py-2.5 rounded-lg bg-board text-paper font-display font-bold text-sm">+ Yangi test</a></div>
+    <div class="space-y-3">
+      ${tests.map((t) => `<div class="bg-white rounded-xl2 p-4 border-2 border-ink/5" data-id="${t.id}">
+        <div class="flex items-start justify-between gap-3">
+          <div><p class="font-display font-bold text-ink">${esc(t.title)}</p><p class="text-xs text-ink/40 mt-0.5 font-body">${t.question_count} savol · ${t.attempt_count||0} urinish${t.category ? ' · '+esc(t.category) : ''}</p></div>
+          <button class="vipToggleBtn shrink-0 text-[11px] font-display font-bold px-2.5 py-1 rounded-full border-2 ${t.is_vip ? 'text-pen border-pen' : 'text-ink/40 border-paperLine'}" data-id="${t.id}" data-current="${t.is_vip}">${t.is_vip ? 'VIP' : 'Ochiq'}</button>
+        </div>
+        <div class="flex items-center gap-3 mt-3 font-body">
+          <label class="text-xs text-ink/40 flex items-center gap-1.5">Vaqt (daqiqa):
+            <input type="number" min="1" value="${t.duration_minutes}" class="durationInput w-16 px-2 py-1 rounded-lg bg-paperDark border-2 border-paperLine text-ink" data-id="${t.id}" />
+          </label>
+          <button class="deleteBtn text-xs text-pen font-bold ml-auto">O'chirish</button>
+        </div>
+      </div>`).join('') || `<p class="text-center text-ink/40 text-sm py-10 font-body">Hali testlar yo'q.</p>`}
+    </div>`;
+  app.innerHTML = adminShell('Testlar', '/admin/testlar', body);
+
+  document.querySelectorAll('.vipToggleBtn').forEach((b) => b.addEventListener('click', async () => {
+    await sb.from('tests').update({ is_vip: b.dataset.current !== 'true' }).eq('id', b.dataset.id);
+    await loadAdminTests();
+  }));
+  document.querySelectorAll('.durationInput').forEach((inp) => inp.addEventListener('blur', async () => {
+    await sb.from('tests').update({ duration_minutes: Number(inp.value) || 90 }).eq('id', inp.dataset.id);
+  }));
+  document.querySelectorAll('.deleteBtn').forEach((b) => b.addEventListener('click', async () => {
+    const id = b.closest('[data-id]').dataset.id;
+    if (!confirm("Testni butunlay o'chirishni tasdiqlaysizmi? Savollari ham o'chib ketadi.")) return;
+    await sb.from('questions').delete().eq('test_id', id);
+    await sb.from('tests').delete().eq('id', id);
+    await loadAdminTests();
+  }));
+}
+
+/* ---------------- ADMIN UPLOAD TEST ---------------- */
+const ANSWER_MAP = { a:0, b:1, c:2, d:3, '1':0, '2':1, '3':2, '4':3 };
+function normalizeHeader(h) { return String(h||'').trim().toLowerCase().replace(/\s+/g,'_'); }
+function parseWorkbook(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { type:'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { defval:'' });
+        const questions = []; const errors = [];
+        rows.forEach((row, i) => {
+          const n = {}; Object.keys(row).forEach((k) => (n[normalizeHeader(k)] = row[k]));
+          const questionText = n.savol || n.question || n['savol_matni'] || '';
+          const options = [n.variant_a||n.a||n['javob_a']||n.variant1, n.variant_b||n.b||n['javob_b']||n.variant2, n.variant_c||n.c||n['javob_c']||n.variant3, n.variant_d||n.d||n['javob_d']||n.variant4].map((v) => String(v??'').trim());
+          const rawAnswer = String(n.togri_javob||n.javob||n.answer||'').trim().toLowerCase();
+          if (!questionText || options.some((o) => !o) || !(rawAnswer in ANSWER_MAP)) { errors.push(i+2); return; }
+          questions.push({ question_text:String(questionText).trim(), options, correct_index:ANSWER_MAP[rawAnswer], order_index:questions.length });
+        });
+        resolve({ questions, errors });
+      } catch (err) { reject(err); }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}
+function downloadTemplate() {
+  const sample = [
+    { savol:"Bola shaxsini rivojlantirishning yetakchi faoliyati nima?", variant_a:"O'qish", variant_b:"O'yin", variant_c:'Mehnat', variant_d:'Sport', togri_javob:'B' },
+    { savol:'Namuna savol 2...', variant_a:'Variant A', variant_b:'Variant B', variant_c:'Variant C', variant_d:'Variant D', togri_javob:'A' },
+  ];
+  const ws = XLSX.utils.json_to_sheet(sample);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Savollar');
+  XLSX.writeFile(wb, 'test_namunasi.xlsx');
+}
+function renderAdminUpload() {
+  window.__parsedQuestions = null;
+  const body = `<form id="uploadForm" class="max-w-xl space-y-5">
+    <div class="bg-white rounded-xl2 p-5 border-2 border-ink/5 space-y-3">
+      <h2 class="font-display font-bold text-ink">Test ma'lumotlari</h2>
+      <input required placeholder="Test nomi" id="upTitle" class="w-full px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body" />
+      <textarea placeholder="Qisqa tavsif (ixtiyoriy)" id="upDesc" rows="2" class="w-full px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body"></textarea>
+      <div class="grid grid-cols-2 gap-3">
+        <input placeholder="Kategoriya" id="upCategory" class="w-full px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body" />
+        <input type="number" min="1" placeholder="Vaqt (daqiqa)" id="upDuration" value="90" class="w-full px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body" />
+      </div>
+      <label class="flex items-center gap-2 text-sm font-medium text-ink/70 font-body"><input type="checkbox" id="upVip" /> VIP test (faqat obunachilar ishlaydi)</label>
+    </div>
+    <div class="bg-white rounded-xl2 p-5 border-2 border-ink/5 space-y-3">
+      <div class="flex items-center justify-between"><h2 class="font-display font-bold text-ink">Savollar fayli</h2><button type="button" id="templateBtn" class="text-board text-xs font-bold font-body">Namuna yuklab olish</button></div>
+      <p class="text-ink/40 text-xs font-body">Ustunlar: savol, variant_a, variant_b, variant_c, variant_d, togri_javob (A/B/C/D). Bitta faylda barcha savollar bo'lsin.</p>
+      <input type="file" accept=".xlsx,.xls,.csv" id="upFile" class="w-full text-sm font-body file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-board file:text-paper file:font-display file:font-bold" />
+      <p id="parseStatus" class="text-sm font-body"></p>
+    </div>
+    <p id="uploadMessage" class="text-pen text-sm font-semibold font-body"></p>
+    <button type="submit" id="uploadBtn" disabled class="w-full py-3 rounded-lg bg-amber text-board font-display font-bold disabled:opacity-50">Testni saqlash</button>
+  </form>`;
+  app.innerHTML = adminShell('Yangi test yuklash', '/admin/testlar/yangi', body);
+
+  document.getElementById('templateBtn').addEventListener('click', downloadTemplate);
+  document.getElementById('upFile').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const status = document.getElementById('parseStatus'); const msg = document.getElementById('uploadMessage');
+    msg.textContent = ''; status.textContent = "O'qilmoqda..."; status.className = 'text-ink/40 text-sm font-body';
+    try {
+      const { questions, errors } = await parseWorkbook(file);
+      window.__parsedQuestions = questions;
+      status.className = 'text-sm font-bold text-sage font-body';
+      status.textContent = `✓ ${file.name}: ${questions.length} savol topildi` + (errors.length ? ` (${errors.length} qator o'tkazib yuborildi: ${errors.slice(0,6).join(', ')}${errors.length>6?'...':''})` : '');
+      document.getElementById('uploadBtn').disabled = questions.length === 0;
+    } catch (err) {
+      window.__parsedQuestions = null;
+      status.textContent = '';
+      msg.textContent = "Faylni o'qib bo'lmadi. Excel yoki CSV formatida ekanligini tekshiring.";
+    }
+  });
+  document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById('uploadMessage'); const btn = document.getElementById('uploadBtn');
+    const parsed = window.__parsedQuestions;
+    if (!parsed || parsed.length === 0) { msg.textContent = 'Avval savollar fayli yuklang.'; return; }
+    btn.disabled = true; btn.textContent = 'Saqlanmoqda...'; msg.textContent = '';
+    const { data: test, error: testError } = await sb.from('tests').insert({
+      title: document.getElementById('upTitle').value,
+      description: document.getElementById('upDesc').value,
+      category: document.getElementById('upCategory').value || null,
+      duration_minutes: Number(document.getElementById('upDuration').value) || 90,
+      is_vip: document.getElementById('upVip').checked,
+      question_count: parsed.length,
+      created_by: state.session.user.id,
+    }).select().single();
+    if (testError) { btn.disabled=false; btn.textContent='Testni saqlash'; msg.textContent = 'Xatolik: ' + testError.message; return; }
+    const rows = parsed.map((q) => ({ ...q, test_id: test.id }));
+    const { error: qError } = await sb.from('questions').insert(rows);
+    if (qError) { btn.disabled=false; btn.textContent='Testni saqlash'; msg.textContent = 'Savollarni saqlashda xatolik: ' + qError.message; return; }
+    location.hash = '#/admin/testlar';
+  });
+}
+
+/* ---------------- ADMIN USERS ---------------- */
+async function renderAdminUsers() {
+  app.innerHTML = adminShell('Foydalanuvchilar', '/admin/foydalanuvchilar', loaderHTML());
+  const { data: users } = await sb.from('profiles').select('*').order('created_at', { ascending:false });
+  window.__adminUsers = users || []; window.__usersQuery = '';
+  drawAdminUsers();
+}
+function drawAdminUsers() {
+  const users = window.__adminUsers || []; const q = window.__usersQuery || '';
+  const filtered = users.filter((u) => (u.full_name||'').toLowerCase().includes(q.toLowerCase()) || (u.phone||'').includes(q));
+  const body = `
+    <input id="userSearch" value="${esc(q)}" placeholder="Ism yoki telefon bo'yicha qidirish..." class="w-full px-4 py-2.5 rounded-lg bg-white border-2 border-paperLine mb-4 focus:outline-none focus:border-board font-body" />
+    <div class="bg-white rounded-xl2 border-2 border-ink/5 divide-y-2 divide-paperLine">
+      ${filtered.map((u) => `<div class="flex items-center justify-between px-4 py-3">
+        <div><p class="text-sm font-bold text-ink font-body">${esc(u.full_name||'Ism kiritilmagan')}</p><p class="text-xs text-ink/40 font-body">${esc(u.phone||'—')}</p></div>
+        <button class="vipUserBtn text-xs font-display font-bold px-3 py-1.5 rounded-full border-2 ${u.is_vip ? 'text-amberDark border-amber' : 'text-ink/40 border-paperLine'}" data-id="${u.id}" data-current="${u.is_vip}">${u.is_vip ? 'VIP faol' : 'VIP berish'}</button>
+      </div>`).join('') || `<p class="text-center text-ink/40 text-sm py-10 font-body">Foydalanuvchi topilmadi.</p>`}
+    </div>`;
+  app.innerHTML = adminShell('Foydalanuvchilar', '/admin/foydalanuvchilar', body);
+
+  document.getElementById('userSearch').addEventListener('input', (e) => { window.__usersQuery = e.target.value; drawAdminUsers(); document.getElementById('userSearch').focus(); });
+  document.querySelectorAll('.vipUserBtn').forEach((b) => b.addEventListener('click', async () => {
+    const newVal = b.dataset.current !== 'true';
+    await sb.from('profiles').update({ is_vip: newVal }).eq('id', b.dataset.id);
+    window.__adminUsers = window.__adminUsers.map((u) => u.id === b.dataset.id ? { ...u, is_vip:newVal } : u);
+    drawAdminUsers();
+  }));
+}
+
+/* ---------------- INIT ---------------- */
+if (window.Telegram && window.Telegram.WebApp) {
+  window.Telegram.WebApp.ready();
+  window.Telegram.WebApp.expand();
+}
+(async function init() {
+  const { data: { session } } = await sb.auth.getSession();
+  state.session = session;
+  await loadProfile(session?.user?.id);
+  state.loading = false;
+  sb.auth.onAuthStateChange(async (_event, newSession) => {
+    state.session = newSession;
+    await loadProfile(newSession?.user?.id);
+    router();
+  });
+  router();
+})();
+</script>
+</body>
+</html>
