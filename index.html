@@ -800,12 +800,67 @@ function drawAdminUsers() {
   }));
 }
 
+/* ---------------- TELEGRAM AUTO-LOGIN + CHANNEL GATE ---------------- */
+function renderChannelGate(channel, initData) {
+  const channelUrl = 'https://t.me/' + String(channel || '').replace('@', '');
+  app.innerHTML = `<div class="min-h-screen bg-board chalk-dust flex flex-col items-center justify-center px-6 text-center">
+    <div class="stamp tilt-1 text-amber w-20 h-20 flex items-center justify-center text-3xl">📢</div>
+    <h1 class="font-display text-xl font-bold text-paper mt-5">Avval kanalga a'zo bo'ling</h1>
+    <p class="text-paper/60 text-sm mt-2 font-body max-w-xs">Botdan foydalanish uchun avval rasmiy kanalimizga a'zo bo'lishingiz kerak.</p>
+    <a href="${channelUrl}" target="_blank" class="mt-6 w-full max-w-xs py-3 rounded-lg bg-amber text-board font-display font-bold">Kanalga o'tish</a>
+    <button id="recheckBtn" class="mt-3 w-full max-w-xs py-3 rounded-lg bg-white/10 text-paper font-display font-bold">A'zo bo'ldim, tekshirish</button>
+  </div>`;
+  document.getElementById('recheckBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('recheckBtn');
+    btn.textContent = 'Tekshirilmoqda...'; btn.disabled = true;
+    const status = await tryTelegramAuth(initData);
+    if (status === 'error') { btn.textContent = "A'zo bo'ldim, tekshirish"; btn.disabled = false; alert("Xatolik yuz berdi, birozdan so'ng qayta urinib ko'ring."); }
+    else if (status === 'gate') { alert("Hali kanalga a'zo bo'lmagansiz."); }
+  });
+}
+async function tryTelegramAuth(initData) {
+  try {
+    const resp = await fetch('/api/telegram-auth', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ initData }),
+    });
+    const result = await resp.json();
+    if (result.ok) {
+      await sb.auth.signInWithPassword({ email: result.email, password: result.password });
+      const { data: { session } } = await sb.auth.getSession();
+      state.session = session;
+      await loadProfile(session?.user?.id);
+      state.loading = false;
+      sb.auth.onAuthStateChange(async (_event, newSession) => {
+        state.session = newSession;
+        await loadProfile(newSession?.user?.id);
+        router();
+      });
+      location.hash = '#/';
+      router();
+      return 'success';
+    }
+    if (result.reason === 'not_subscribed') { renderChannelGate(result.channel, initData); return 'gate'; }
+    return 'error';
+  } catch (err) {
+    console.error('Telegram auth error', err);
+    return 'error';
+  }
+}
+
 /* ---------------- INIT ---------------- */
 if (window.Telegram && window.Telegram.WebApp) {
   window.Telegram.WebApp.ready();
   window.Telegram.WebApp.expand();
 }
 (async function init() {
+  const initData = window.Telegram?.WebApp?.initData;
+  if (initData) {
+    app.innerHTML = loaderHTML();
+    const status = await tryTelegramAuth(initData);
+    if (status === 'success' || status === 'gate') return; // ekran allaqachon ko'rsatildi
+    // status === 'error' bo'lsa, oddiy telefon+parol oqimiga tushamiz
+  }
+
   const { data: { session } } = await sb.auth.getSession();
   state.session = session;
   await loadProfile(session?.user?.id);
