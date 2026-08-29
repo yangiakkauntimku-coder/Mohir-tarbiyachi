@@ -8,8 +8,28 @@
 //   ℹ️ Ma'lumot va yordam   -> platforma haqida qisqa ma'lumot beradi
 // ============================================================
 
+import { createClient } from "@supabase/supabase-js";
+
 const SITE_URL = "https://mohirtarbiyachi.vercel.app"; // <-- saytingiz Vercel domenini shu yerga yozing
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+
+const SUPABASE_URL = "https://mxrxgzrzxkvdzyfdvlhe.supabase.co";
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const admin = SERVICE_ROLE_KEY ? createClient(SUPABASE_URL, SERVICE_ROLE_KEY) : null;
+
+async function rememberBotUser(message) {
+  if (!admin) return; // SUPABASE_SERVICE_ROLE_KEY sozlanmagan bo'lsa, jim o'tkazib yuboramiz
+  try {
+    await admin.from("bot_users").upsert({
+      chat_id: message.chat.id,
+      telegram_id: message.from?.id,
+      username: message.from?.username || null,
+      first_name: message.from?.first_name || null,
+    });
+  } catch (err) {
+    console.error("bot_users saqlashda xatolik:", err);
+  }
+}
 
 // -------- O'ZGARTIRISHINGIZ MUMKIN BO'LGAN MATNLAR --------
 const ADMIN_CONTACT = "@AzadiB_way"; // <-- shu yerga o'z Telegram username'ingizni yozing
@@ -75,6 +95,7 @@ export default async function handler(req, res) {
 
     if (chatId) {
       const firstName = message?.from?.first_name || "";
+      await rememberBotUser(message);
 
       if (text.startsWith("/start")) {
         await sendMessage(
