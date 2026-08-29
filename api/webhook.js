@@ -8,7 +8,7 @@
 //   ℹ️ Ma'lumot va yordam   -> platforma haqida qisqa ma'lumot beradi
 // ============================================================
 
-const SITE_URL = "https://mohir-tarbiyachi.vercel.app"; // <-- saytingiz Vercel domenini shu yerga yozing
+const SITE_URL = "https://mohirtarbiyachi.vercel.app"; // <-- saytingiz Vercel domenini shu yerga yozing
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 // -------- O'ZGARTIRISHINGIZ MUMKIN BO'LGAN MATNLAR --------
