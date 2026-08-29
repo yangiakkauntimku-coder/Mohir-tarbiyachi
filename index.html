@@ -108,6 +108,7 @@ function adminNav(active) {
     { to:'/admin/testlar', label:'Testlar' },
     { to:'/admin/testlar/yangi', label:'Yuklash' },
     { to:'/admin/foydalanuvchilar', label:'Foydalanuvchilar' },
+    { to:'/admin/bildirishnoma', label:'Bildirishnoma' },
   ];
   return `
   <aside class="hidden md:flex md:w-64 md:flex-col bg-board text-paper p-6 fixed top-0 left-0 bottom-0">
@@ -173,6 +174,7 @@ async function router() {
   if (hash === '/admin/testlar') { if (requireAdmin()) return renderAdminTests(); return; }
   if (hash === '/admin/testlar/yangi') { if (requireAdmin()) return renderAdminUpload(); return; }
   if (hash === '/admin/foydalanuvchilar') { if (requireAdmin()) return renderAdminUsers(); return; }
+  if (hash === '/admin/bildirishnoma') { if (requireAdmin()) return renderAdminBroadcast(); return; }
 
   location.hash = '#/';
 }
@@ -800,6 +802,51 @@ function drawAdminUsers() {
   }));
 }
 
+/* ---------------- ADMIN BROADCAST ---------------- */
+function renderAdminBroadcast() {
+  const body = `<div class="max-w-xl space-y-5">
+    <div class="bg-white rounded-xl2 p-5 border-2 border-ink/5 space-y-3">
+      <h2 class="font-display font-bold text-ink">Barcha bot foydalanuvchilariga xabar</h2>
+      <p class="text-ink/40 text-xs font-body">Xabar botga kamida bir marta yozgan barcha foydalanuvchilarga yuboriladi.</p>
+      <textarea id="broadcastText" rows="5" placeholder="Xabar matnini shu yerga yozing..." class="w-full px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body"></textarea>
+      <p id="broadcastStatus" class="text-sm font-body"></p>
+      <button id="broadcastBtn" class="w-full py-3 rounded-lg bg-amber text-board font-display font-bold disabled:opacity-50">Yuborish</button>
+    </div>
+  </div>`;
+  app.innerHTML = adminShell('Bildirishnoma', '/admin/bildirishnoma', body);
+
+  document.getElementById('broadcastBtn').addEventListener('click', async () => {
+    const text = document.getElementById('broadcastText').value.trim();
+    const status = document.getElementById('broadcastStatus');
+    const btn = document.getElementById('broadcastBtn');
+    if (!text) { status.className = 'text-sm font-body text-pen'; status.textContent = 'Avval xabar matnini kiriting.'; return; }
+    if (!confirm("Xabar barcha bot foydalanuvchilariga yuborilsinmi?")) return;
+    btn.disabled = true; btn.textContent = 'Yuborilmoqda...';
+    status.className = 'text-sm font-body text-ink/50'; status.textContent = '';
+    try {
+      const { data: { session } } = await sb.auth.getSession();
+      const resp = await fetch('/api/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ text }),
+      });
+      const result = await resp.json();
+      if (result.ok) {
+        status.className = 'text-sm font-body text-sage font-bold';
+        status.textContent = `✓ Yuborildi: ${result.sent}/${result.total}` + (result.failed ? ` (${result.failed} ta yetkazilmadi)` : '');
+        document.getElementById('broadcastText').value = '';
+      } else {
+        status.className = 'text-sm font-body text-pen';
+        status.textContent = 'Xatolik: ' + (result.error || "noma'lum xatolik");
+      }
+    } catch (err) {
+      status.className = 'text-sm font-body text-pen';
+      status.textContent = 'Xatolik yuz berdi, qayta urinib ko\'ring.';
+    }
+    btn.disabled = false; btn.textContent = 'Yuborish';
+  });
+}
+
 /* ---------------- TELEGRAM AUTO-LOGIN + CHANNEL GATE ---------------- */
 function renderChannelGate(channel, initData) {
   const channelUrl = 'https://t.me/' + String(channel || '').replace('@', '');
@@ -816,6 +863,20 @@ function renderChannelGate(channel, initData) {
     const status = await tryTelegramAuth(initData);
     if (status === 'error') { btn.textContent = "A'zo bo'ldim, tekshirish"; btn.disabled = false; alert("Xatolik yuz berdi, birozdan so'ng qayta urinib ko'ring."); }
     else if (status === 'gate') { alert("Hali kanalga a'zo bo'lmagansiz."); }
+  });
+}
+function renderTelegramError(initData) {
+  app.innerHTML = `<div class="min-h-screen bg-board chalk-dust flex flex-col items-center justify-center px-6 text-center">
+    <div class="stamp tilt-3 text-pen w-20 h-20 flex items-center justify-center text-3xl">!</div>
+    <h1 class="font-display text-xl font-bold text-paper mt-5">Tekshirishda xatolik</h1>
+    <p class="text-paper/60 text-sm mt-2 font-body max-w-xs">A'zolikni tasdiqlashda muammo yuz berdi. Birozdan so'ng qayta urinib ko'ring.</p>
+    <button id="retryBtn" class="mt-6 w-full max-w-xs py-3 rounded-lg bg-amber text-board font-display font-bold">Qayta urinish</button>
+  </div>`;
+  document.getElementById('retryBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('retryBtn');
+    btn.textContent = 'Tekshirilmoqda...'; btn.disabled = true;
+    const status = await tryTelegramAuth(initData);
+    if (status === 'error') { btn.textContent = 'Qayta urinish'; btn.disabled = false; }
   });
 }
 async function tryTelegramAuth(initData) {
@@ -840,9 +901,11 @@ async function tryTelegramAuth(initData) {
       return 'success';
     }
     if (result.reason === 'not_subscribed') { renderChannelGate(result.channel, initData); return 'gate'; }
+    renderTelegramError(initData);
     return 'error';
   } catch (err) {
     console.error('Telegram auth error', err);
+    renderTelegramError(initData);
     return 'error';
   }
 }
@@ -855,10 +918,12 @@ if (window.Telegram && window.Telegram.WebApp) {
 (async function init() {
   const initData = window.Telegram?.WebApp?.initData;
   if (initData) {
+    // Telegram ichida ochilgan bo'lsa — eski (qolib ketgan) sessiyaga ishonmaymiz,
+    // faqat telegram-auth orqali tasdiqlangan sessiyaga ruxsat beramiz.
+    await sb.auth.signOut();
     app.innerHTML = loaderHTML();
-    const status = await tryTelegramAuth(initData);
-    if (status === 'success' || status === 'gate') return; // ekran allaqachon ko'rsatildi
-    // status === 'error' bo'lsa, oddiy telefon+parol oqimiga tushamiz
+    await tryTelegramAuth(initData); // natija (success/gate/error) ekranni o'zi ko'rsatadi
+    return;
   }
 
   const { data: { session } } = await sb.auth.getSession();
