@@ -81,7 +81,7 @@ function initials(name) {
 function letter(i) { return ['A','B','C','D','E','F'][i] || (i+1); }
 function phoneToEmail(phone) {
   const digits = String(phone || '').replace(/\D/g, '');
-  return `u${digits}@mohir.local`;
+  return `u${digits}@mohirtarbiyachi.uz`;
 }
 function normalizePhone(phone) {
   return String(phone || '').replace(/\D/g, '');
@@ -202,7 +202,6 @@ function renderLogin() {
       <button type="submit" id="loginBtn" class="w-full py-3 rounded-lg bg-board text-paper font-display font-bold disabled:opacity-60">Kirish →</button>
     </form>
     <p class="text-center text-sm text-paper/70 mt-6 font-body">Hisobingiz yo'qmi? <a href="#/royxat" class="text-amber font-bold">Ro'yxatdan o'tish</a></p>
-    <a href="#/admin/kirish" class="block text-center text-xs text-paper/40 mt-4 font-body">Admin sifatida kirish</a>
   `);
   document.getElementById('loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
