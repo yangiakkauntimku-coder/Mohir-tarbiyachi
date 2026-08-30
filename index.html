@@ -937,14 +937,6 @@ if (window.Telegram && window.Telegram.WebApp) {
     router();
   });
   router();
-
-  // Diagnostika: agar Telegram muhitida bo'lsak-u, initData bo'sh bo'lsa, ko'rinadigan belgi qo'yamiz
-  if (window.Telegram && window.Telegram.WebApp) {
-    const tag = document.createElement('div');
-    tag.textContent = 'TG WebApp topildi, initData: ' + (window.Telegram.WebApp.initData ? 'bor (' + window.Telegram.WebApp.initData.length + ' belgi)' : "YO'Q / bo'sh");
-    tag.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#C1443D;color:#fff;font-size:11px;padding:4px;text-align:center;z-index:9999;';
-    document.body.appendChild(tag);
-  }
 })();
 </script>
 </body>
