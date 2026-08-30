@@ -106,7 +106,7 @@ function adminNav(active) {
   const items = [
     { to:'/admin', label:'Boshqaruv' },
     { to:'/admin/testlar', label:'Testlar' },
-    { to:'/admin/testlar/yangi', label:'Yuklash' },
+    { to:'/admin/testlar/yangi', label:'Savollar' },
     { to:'/admin/foydalanuvchilar', label:'Foydalanuvchilar' },
     { to:'/admin/bildirishnoma', label:'Bildirishnoma' },
   ];
@@ -672,105 +672,219 @@ function drawAdminTests() {
   }));
 }
 
-/* ---------------- ADMIN UPLOAD TEST ---------------- */
-const ANSWER_MAP = { a:0, b:1, c:2, d:3, '1':0, '2':1, '3':2, '4':3 };
-function normalizeHeader(h) { return String(h||'').trim().toLowerCase().replace(/\s+/g,'_'); }
-function parseWorkbook(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const wb = XLSX.read(e.target.result, { type:'array' });
-        const sheet = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(sheet, { defval:'' });
-        const questions = []; const errors = [];
-        rows.forEach((row, i) => {
-          const n = {}; Object.keys(row).forEach((k) => (n[normalizeHeader(k)] = row[k]));
-          const questionText = n.savol || n.question || n['savol_matni'] || '';
-          const options = [n.variant_a||n.a||n['javob_a']||n.variant1, n.variant_b||n.b||n['javob_b']||n.variant2, n.variant_c||n.c||n['javob_c']||n.variant3, n.variant_d||n.d||n['javob_d']||n.variant4].map((v) => String(v??'').trim());
-          const rawAnswer = String(n.togri_javob||n.javob||n.answer||'').trim().toLowerCase();
-          if (!questionText || options.some((o) => !o) || !(rawAnswer in ANSWER_MAP)) { errors.push(i+2); return; }
-          questions.push({ question_text:String(questionText).trim(), options, correct_index:ANSWER_MAP[rawAnswer], order_index:questions.length });
-        });
-        resolve({ questions, errors });
-      } catch (err) { reject(err); }
-    };
-    reader.onerror = reject;
-    reader.readAsArrayBuffer(file);
-  });
-}
-function downloadTemplate() {
-  const sample = [
-    { savol:"Bola shaxsini rivojlantirishning yetakchi faoliyati nima?", variant_a:"O'qish", variant_b:"O'yin", variant_c:'Mehnat', variant_d:'Sport', togri_javob:'B' },
-    { savol:'Namuna savol 2...', variant_a:'Variant A', variant_b:'Variant B', variant_c:'Variant C', variant_d:'Variant D', togri_javob:'A' },
-  ];
-  const ws = XLSX.utils.json_to_sheet(sample);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Savollar');
-  XLSX.writeFile(wb, 'test_namunasi.xlsx');
-}
+/* ---------------- ADMIN UPLOAD TEST (JSON + qo'lda) ---------------- */
 function renderAdminUpload() {
-  window.__parsedQuestions = null;
-  const body = `<form id="uploadForm" class="max-w-xl space-y-5">
-    <div class="bg-white rounded-xl2 p-5 border-2 border-ink/5 space-y-3">
-      <h2 class="font-display font-bold text-ink">Test ma'lumotlari</h2>
-      <input required placeholder="Test nomi" id="upTitle" class="w-full px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body" />
-      <textarea placeholder="Qisqa tavsif (ixtiyoriy)" id="upDesc" rows="2" class="w-full px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body"></textarea>
-      <div class="grid grid-cols-2 gap-3">
-        <input placeholder="Kategoriya" id="upCategory" class="w-full px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body" />
-        <input type="number" min="1" placeholder="Vaqt (daqiqa)" id="upDuration" value="90" class="w-full px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body" />
-      </div>
-      <label class="flex items-center gap-2 text-sm font-medium text-ink/70 font-body"><input type="checkbox" id="upVip" /> VIP test (faqat obunachilar ishlaydi)</label>
-    </div>
-    <div class="bg-white rounded-xl2 p-5 border-2 border-ink/5 space-y-3">
-      <div class="flex items-center justify-between"><h2 class="font-display font-bold text-ink">Savollar fayli</h2><button type="button" id="templateBtn" class="text-board text-xs font-bold font-body">Namuna yuklab olish</button></div>
-      <p class="text-ink/40 text-xs font-body">Ustunlar: savol, variant_a, variant_b, variant_c, variant_d, togri_javob (A/B/C/D). Bitta faylda barcha savollar bo'lsin.</p>
-      <input type="file" accept=".xlsx,.xls,.csv" id="upFile" class="w-full text-sm font-body file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-board file:text-paper file:font-display file:font-bold" />
-      <p id="parseStatus" class="text-sm font-body"></p>
-    </div>
-    <p id="uploadMessage" class="text-pen text-sm font-semibold font-body"></p>
-    <button type="submit" id="uploadBtn" disabled class="w-full py-3 rounded-lg bg-amber text-board font-display font-bold disabled:opacity-50">Testni saqlash</button>
-  </form>`;
-  app.innerHTML = adminShell('Yangi test yuklash', '/admin/testlar/yangi', body);
+  window.__uploadTests = null;
+  window.__manualVariantCount = 4;
+  window.__manualCorrect = 0;
 
-  document.getElementById('templateBtn').addEventListener('click', downloadTemplate);
-  document.getElementById('upFile').addEventListener('change', async (e) => {
-    const file = e.target.files?.[0]; if (!file) return;
-    const status = document.getElementById('parseStatus'); const msg = document.getElementById('uploadMessage');
-    msg.textContent = ''; status.textContent = "O'qilmoqda..."; status.className = 'text-ink/40 text-sm font-body';
-    try {
-      const { questions, errors } = await parseWorkbook(file);
-      window.__parsedQuestions = questions;
-      status.className = 'text-sm font-bold text-sage font-body';
-      status.textContent = `✓ ${file.name}: ${questions.length} savol topildi` + (errors.length ? ` (${errors.length} qator o'tkazib yuborildi: ${errors.slice(0,6).join(', ')}${errors.length>6?'...':''})` : '');
-      document.getElementById('uploadBtn').disabled = questions.length === 0;
-    } catch (err) {
-      window.__parsedQuestions = null;
-      status.textContent = '';
-      msg.textContent = "Faylni o'qib bo'lmadi. Excel yoki CSV formatida ekanligini tekshiring.";
-    }
+  const body = `<div class="max-w-xl space-y-5">
+    <div class="bg-white rounded-xl2 p-5 border-2 border-ink/5 space-y-3">
+      <h2 class="font-display font-bold text-ink">Test tanlang</h2>
+      <div class="flex gap-2">
+        <select id="testSelect" class="flex-1 px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body">
+          <option value="">— Yuklanmoqda —</option>
+        </select>
+        <button type="button" id="newTestToggle" class="px-4 py-2.5 rounded-lg bg-board text-paper font-display font-bold text-sm whitespace-nowrap">+ Yangi</button>
+      </div>
+      <div id="newTestForm" class="hidden space-y-2 pt-2 border-t-2 border-dashed border-paperLine">
+        <input id="ntTitle" placeholder="Test nomi" class="w-full px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body" />
+        <div class="grid grid-cols-2 gap-2">
+          <input id="ntCategory" placeholder="Kategoriya (ixtiyoriy)" class="w-full px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body" />
+          <input id="ntDuration" type="number" min="1" value="90" placeholder="Vaqt (daqiqa)" class="w-full px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body" />
+        </div>
+        <label class="flex items-center gap-2 text-sm font-medium text-ink/70 font-body"><input type="checkbox" id="ntVip" /> VIP test</label>
+        <button type="button" id="ntCreateBtn" class="w-full py-2.5 rounded-lg bg-amber text-board font-display font-bold text-sm">Yaratish</button>
+        <p id="ntMsg" class="text-pen text-xs font-body"></p>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl2 p-5 border-2 border-ink/5 space-y-3">
+      <h2 class="font-display font-bold text-ink">Ko'p savol yuklash (JSON)</h2>
+      <p class="text-ink/40 text-xs font-body">Har element: <code>q</code> (savol), <code>opts</code> (variantlar ro'yxati), <code>ans</code> (to'g'ri javob indeksi, 0 dan boshlanadi), <code>exp</code> (izoh, ixtiyoriy).</p>
+      <textarea id="jsonInput" rows="7" placeholder='[
+  { "q":"Savol?", "opts":["A","B","C","D"], "ans":2, "exp":"Izoh" },
+  { "q":"Ikkinchi savol?", "opts":["1","2","3"], "ans":0 }
+]' class="w-full px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-mono text-xs"></textarea>
+      <input type="file" id="jsonFile" accept=".json,.txt" class="w-full text-sm font-body file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-board file:text-paper file:font-display file:font-bold" />
+      <p id="jsonMsg" class="text-sm font-body"></p>
+      <button type="button" id="jsonUploadBtn" class="w-full py-3 rounded-lg bg-amber text-board font-display font-bold disabled:opacity-50">Hammasini yuklash</button>
+    </div>
+
+    <div class="bg-white rounded-xl2 p-5 border-2 border-ink/5 space-y-3">
+      <h2 class="font-display font-bold text-ink">Bitta savol qo'shish</h2>
+      <textarea id="manualQuestion" rows="2" placeholder="Savolni yozing" class="w-full px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body"></textarea>
+      <div id="variantList" class="space-y-2"></div>
+      <button type="button" id="addVariantBtn" class="w-full py-2 rounded-lg border-2 border-dashed border-paperLine text-board font-display font-bold text-sm">+ Variant qo'shish</button>
+      <p class="text-ink/40 text-xs font-body">Doirani bosib to'g'ri javobni belgilang.</p>
+      <textarea id="manualExplanation" rows="2" placeholder="Izoh (ixtiyoriy) — to'g'ri javob nega to'g'ri ekanini tushuntiring" class="w-full px-4 py-2.5 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body"></textarea>
+      <p id="manualMsg" class="text-sm font-body"></p>
+      <button type="button" id="manualSaveBtn" class="w-full py-3 rounded-lg bg-board text-paper font-display font-bold disabled:opacity-50">Saqlash</button>
+    </div>
+  </div>`;
+  app.innerHTML = adminShell('Savol qo\'shish', '/admin/testlar/yangi', body);
+
+  drawVariantInputs();
+
+  document.getElementById('newTestToggle').addEventListener('click', () => {
+    document.getElementById('newTestForm').classList.toggle('hidden');
   });
-  document.getElementById('uploadForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const msg = document.getElementById('uploadMessage'); const btn = document.getElementById('uploadBtn');
-    const parsed = window.__parsedQuestions;
-    if (!parsed || parsed.length === 0) { msg.textContent = 'Avval savollar fayli yuklang.'; return; }
-    btn.disabled = true; btn.textContent = 'Saqlanmoqda...'; msg.textContent = '';
-    const { data: test, error: testError } = await sb.from('tests').insert({
-      title: document.getElementById('upTitle').value,
-      description: document.getElementById('upDesc').value,
-      category: document.getElementById('upCategory').value || null,
-      duration_minutes: Number(document.getElementById('upDuration').value) || 90,
-      is_vip: document.getElementById('upVip').checked,
-      question_count: parsed.length,
+  document.getElementById('ntCreateBtn').addEventListener('click', async () => {
+    const title = document.getElementById('ntTitle').value.trim();
+    const msg = document.getElementById('ntMsg');
+    if (!title) { msg.textContent = "Test nomini kiriting."; return; }
+    const btn = document.getElementById('ntCreateBtn');
+    btn.disabled = true; btn.textContent = 'Yaratilmoqda...'; msg.textContent = '';
+    const { data: test, error } = await sb.from('tests').insert({
+      title,
+      category: document.getElementById('ntCategory').value || null,
+      duration_minutes: Number(document.getElementById('ntDuration').value) || 90,
+      is_vip: document.getElementById('ntVip').checked,
+      question_count: 0,
       created_by: state.session.user.id,
     }).select().single();
-    if (testError) { btn.disabled=false; btn.textContent='Testni saqlash'; msg.textContent = 'Xatolik: ' + testError.message; return; }
-    const rows = parsed.map((q) => ({ ...q, test_id: test.id }));
-    const { error: qError } = await sb.from('questions').insert(rows);
-    if (qError) { btn.disabled=false; btn.textContent='Testni saqlash'; msg.textContent = 'Savollarni saqlashda xatolik: ' + qError.message; return; }
-    location.hash = '#/admin/testlar';
+    btn.disabled = false; btn.textContent = 'Yaratish';
+    if (error) { msg.textContent = 'Xatolik: ' + error.message; return; }
+    await loadTestsIntoSelect(test.id);
+    document.getElementById('newTestForm').classList.add('hidden');
+    document.getElementById('ntTitle').value = '';
   });
+
+  loadTestsIntoSelect();
+
+  document.getElementById('jsonFile').addEventListener('change', (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => { document.getElementById('jsonInput').value = ev.target.result; };
+    reader.readAsText(file);
+  });
+  document.getElementById('jsonUploadBtn').addEventListener('click', handleJsonUpload);
+
+  document.getElementById('addVariantBtn').addEventListener('click', () => {
+    window.__manualVariantCount = Math.min(8, window.__manualVariantCount + 1);
+    drawVariantInputs();
+  });
+  document.getElementById('manualSaveBtn').addEventListener('click', handleManualSave);
+}
+
+async function loadTestsIntoSelect(selectId) {
+  const { data: tests } = await sb.from('tests').select('id,title,question_count').order('created_at', { ascending:false });
+  window.__uploadTests = tests || [];
+  const select = document.getElementById('testSelect');
+  if (!select) return;
+  select.innerHTML = (tests || []).map((t) => `<option value="${t.id}">${esc(t.title)} (${t.question_count||0} savol)</option>`).join('') || '<option value="">Testlar yo\'q</option>';
+  if (selectId) select.value = selectId;
+}
+
+function drawVariantInputs() {
+  const container = document.getElementById('variantList');
+  if (!container) return;
+  const count = window.__manualVariantCount;
+  const correct = window.__manualCorrect;
+  container.innerHTML = Array.from({ length: count }).map((_, i) => `
+    <div class="flex items-center gap-2">
+      <button type="button" class="correctRadio bubble ${i===correct ? 'filled' : ''} shrink-0" data-idx="${i}"></button>
+      <input class="variantInput flex-1 px-3 py-2 rounded-lg bg-paperDark border-2 border-paperLine focus:outline-none focus:border-board font-body text-sm" placeholder="Variant matni" data-idx="${i}" />
+      ${count > 2 ? `<button type="button" class="removeVariantBtn text-pen text-lg leading-none px-1" data-idx="${i}">×</button>` : ''}
+    </div>
+  `).join('');
+  container.querySelectorAll('.correctRadio').forEach((b) => b.addEventListener('click', () => {
+    window.__manualCorrect = Number(b.dataset.idx);
+    drawVariantInputsPreservingValues();
+  }));
+  container.querySelectorAll('.removeVariantBtn').forEach((b) => b.addEventListener('click', () => {
+    const idx = Number(b.dataset.idx);
+    const values = getVariantValues();
+    values.splice(idx, 1);
+    window.__manualVariantCount = values.length;
+    if (window.__manualCorrect >= values.length) window.__manualCorrect = 0;
+    else if (window.__manualCorrect > idx) window.__manualCorrect -= 1;
+    drawVariantInputs();
+    setVariantValues(values);
+  }));
+}
+function getVariantValues() {
+  return Array.from(document.querySelectorAll('.variantInput')).map((inp) => inp.value);
+}
+function setVariantValues(values) {
+  document.querySelectorAll('.variantInput').forEach((inp, i) => { inp.value = values[i] || ''; });
+}
+function drawVariantInputsPreservingValues() {
+  const values = getVariantValues();
+  drawVariantInputs();
+  setVariantValues(values);
+}
+
+async function handleJsonUpload() {
+  const raw = document.getElementById('jsonInput').value.trim();
+  const msg = document.getElementById('jsonMsg');
+  const testId = document.getElementById('testSelect').value;
+  const btn = document.getElementById('jsonUploadBtn');
+  msg.className = 'text-sm font-body text-pen';
+  if (!testId) { msg.textContent = 'Avval test tanlang yoki yangi test yarating.'; return; }
+  if (!raw) { msg.textContent = 'JSON matnini kiriting yoki fayl yuklang.'; return; }
+
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { msg.textContent = "JSON formatida xatolik bor, tekshirib qayta urinib ko'ring."; return; }
+  if (!Array.isArray(parsed) || parsed.length === 0) { msg.textContent = "Ro'yxat (array) formatida bo'lishi kerak."; return; }
+
+  const test = (window.__uploadTests || []).find((t) => t.id === testId);
+  const startIndex = test?.question_count || 0;
+  const rows = []; const errors = [];
+  parsed.forEach((item, i) => {
+    const q = String(item.q || '').trim();
+    const opts = Array.isArray(item.opts) ? item.opts.map((o) => String(o ?? '').trim()) : null;
+    const ans = Number(item.ans);
+    if (!q || !opts || opts.length < 2 || opts.some((o) => !o) || !Number.isInteger(ans) || ans < 0 || ans >= opts.length) {
+      errors.push(i + 1); return;
+    }
+    rows.push({ test_id: testId, question_text: q, options: opts, correct_index: ans, explanation: item.exp || null, order_index: startIndex + rows.length });
+  });
+  if (rows.length === 0) { msg.textContent = "Hech qanday to'g'ri formatdagi savol topilmadi."; return; }
+
+  btn.disabled = true; btn.textContent = 'Yuklanmoqda...';
+  const { error } = await sb.from('questions').insert(rows);
+  if (error) { btn.disabled = false; btn.textContent = 'Hammasini yuklash'; msg.textContent = 'Xatolik: ' + error.message; return; }
+  await sb.from('tests').update({ question_count: startIndex + rows.length }).eq('id', testId);
+  btn.disabled = false; btn.textContent = 'Hammasini yuklash';
+  msg.className = 'text-sm font-body text-sage font-bold';
+  msg.textContent = `✓ ${rows.length} ta savol qo'shildi` + (errors.length ? ` (${errors.length} ta noto'g'ri formatdagi element o'tkazib yuborildi)` : '');
+  document.getElementById('jsonInput').value = '';
+  await loadTestsIntoSelect(testId);
+}
+
+async function handleManualSave() {
+  const testId = document.getElementById('testSelect').value;
+  const questionText = document.getElementById('manualQuestion').value.trim();
+  const variants = getVariantValues().map((v) => v.trim());
+  const explanation = document.getElementById('manualExplanation').value.trim();
+  const msg = document.getElementById('manualMsg');
+  const btn = document.getElementById('manualSaveBtn');
+  msg.className = 'text-sm font-body text-pen';
+
+  if (!testId) { msg.textContent = 'Avval test tanlang yoki yangi test yarating.'; return; }
+  if (!questionText) { msg.textContent = 'Savol matnini kiriting.'; return; }
+  if (variants.some((v) => !v)) { msg.textContent = "Barcha variant maydonlarini to'ldiring."; return; }
+
+  const test = (window.__uploadTests || []).find((t) => t.id === testId);
+  const orderIndex = test?.question_count || 0;
+
+  btn.disabled = true; btn.textContent = 'Saqlanmoqda...';
+  const { error } = await sb.from('questions').insert({
+    test_id: testId, question_text: questionText, options: variants,
+    correct_index: window.__manualCorrect, explanation: explanation || null, order_index: orderIndex,
+  });
+  if (error) { btn.disabled = false; btn.textContent = 'Saqlash'; msg.textContent = 'Xatolik: ' + error.message; return; }
+  await sb.from('tests').update({ question_count: orderIndex + 1 }).eq('id', testId);
+
+  btn.disabled = false; btn.textContent = 'Saqlash';
+  msg.className = 'text-sm font-body text-sage font-bold';
+  msg.textContent = "✓ Savol qo'shildi";
+  document.getElementById('manualQuestion').value = '';
+  document.getElementById('manualExplanation').value = '';
+  window.__manualVariantCount = 4; window.__manualCorrect = 0;
+  drawVariantInputs();
+  await loadTestsIntoSelect(testId);
 }
 
 /* ---------------- ADMIN USERS ---------------- */
