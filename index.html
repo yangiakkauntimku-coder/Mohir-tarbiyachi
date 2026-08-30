@@ -865,11 +865,12 @@ function renderChannelGate(channel, initData) {
     else if (status === 'gate') { alert("Hali kanalga a'zo bo'lmagansiz."); }
   });
 }
-function renderTelegramError(initData) {
+function renderTelegramError(initData, detail) {
   app.innerHTML = `<div class="min-h-screen bg-board chalk-dust flex flex-col items-center justify-center px-6 text-center">
     <div class="stamp tilt-3 text-pen w-20 h-20 flex items-center justify-center text-3xl">!</div>
     <h1 class="font-display text-xl font-bold text-paper mt-5">Tekshirishda xatolik</h1>
     <p class="text-paper/60 text-sm mt-2 font-body max-w-xs">A'zolikni tasdiqlashda muammo yuz berdi. Birozdan so'ng qayta urinib ko'ring.</p>
+    ${detail ? `<p class="text-pen/80 text-xs mt-2 font-mono break-all max-w-xs">${esc(detail)}</p>` : ''}
     <button id="retryBtn" class="mt-6 w-full max-w-xs py-3 rounded-lg bg-amber text-board font-display font-bold">Qayta urinish</button>
   </div>`;
   document.getElementById('retryBtn').addEventListener('click', async () => {
@@ -901,11 +902,11 @@ async function tryTelegramAuth(initData) {
       return 'success';
     }
     if (result.reason === 'not_subscribed') { renderChannelGate(result.channel, initData); return 'gate'; }
-    renderTelegramError(initData);
+    renderTelegramError(initData, `HTTP ${resp.status}: ${result.error || result.reason || "noma'lum"}`);
     return 'error';
   } catch (err) {
     console.error('Telegram auth error', err);
-    renderTelegramError(initData);
+    renderTelegramError(initData, String(err?.message || err));
     return 'error';
   }
 }
