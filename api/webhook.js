@@ -52,7 +52,6 @@ const INFO_TEXT =
 
 const MAIN_MENU = {
   keyboard: [
-    [{ text: "🎓 Test ishlash", web_app: { url: SITE_URL } }],
     [{ text: "🔥 VIP obuna" }, { text: "ℹ️ Ma'lumot va yordam" }],
   ],
   resize_keyboard: true,
